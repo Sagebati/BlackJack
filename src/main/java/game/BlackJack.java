@@ -28,8 +28,6 @@ public class BlackJack {
         return turn;
     }
 
-
-
     public static int score(Collection<Card> cards) {
         var total = 0;
         for (Card c : cards) {
@@ -47,4 +45,6 @@ public class BlackJack {
         }
         return total;
     }
+
+
 }
