@@ -1,6 +1,6 @@
 package game;
 
-import javax.swing.*;
+import java.lang.reflect.Array;
 import java.util.*;
 
 public class BlackJack {
@@ -22,6 +22,14 @@ public class BlackJack {
         var res = cards.getFirst();
         cards.removeFirst();
         return res;
+    }
+
+    public List<Card> pullCards(int n) {
+        List<Card> l = new ArrayList<>();
+        for (int i = 0 ; i < n; i++){
+            l.add(pullCard());
+        }
+        return l;
     }
 
     public int getTurn() {
