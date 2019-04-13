@@ -27,7 +27,7 @@ public class Dealer extends Agent {
     private final HashMap<AID, List<Card>> playerCards;
     private final Map<AID, Double> bets;
     private final List<Card> cards;
-    private final Set<Player> busted;
+    private final Set<AID> busted;
     private BlackJack deck;
 
 
@@ -199,6 +199,7 @@ public class Dealer extends Agent {
             logger.info("Player busted : " + player);
             var m = new ACLMessage(Proto.Busted.getValue());
             m.addReceiver(player);
+            busted.add(player);
             send(m);
             turnFinished = true;
         } else {
@@ -245,7 +246,7 @@ public class Dealer extends Agent {
         final int myScore = BlackJack.score(this.cards);
 
         if (myScore > 21) {
-            // Everyone wins
+            // Everyone wins without busted players
             bets.keySet().stream().filter(p -> !busted.contains(p)).forEach(
                     p -> giveMoney(p, bets.get(p) * 2)
             );
@@ -254,13 +255,13 @@ public class Dealer extends Agent {
                     p -> {
                         final int playerScore = BlackJack.score(playerCards.get(p));
                         if (playerScore > myScore) {
-                            logger.info("Player: {}, won : {}", p, bets.get(p));
+                            logger.info("Player: {}, won : {}", p.getName(), bets.get(p));
                             giveMoney(p, bets.get(p) * 2);
                         } else if (playerScore == myScore) {
-                            logger.info("Player: {}, Equality", p);
+                            logger.info("Player: {}, Equality", p.getName());
                             giveMoney(p, bets.get(p));
                         } else {
-                            logger.info("Player: {}, Lost", p);
+                            logger.info("Player: {}, Lost", p.getName());
                             giveMoney(p, 0);
                         }
                     }
