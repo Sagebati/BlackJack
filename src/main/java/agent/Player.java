@@ -1,6 +1,7 @@
 package agent;
 
 import game.Action;
+import game.BlackJack;
 import game.Card;
 import jade.core.AID;
 import jade.core.Agent;
@@ -19,11 +20,20 @@ import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class Player extends Agent {
+public class Player extends Agent implements Intelligency<Action> {
     private final Logger logger = LoggerFactory.getLogger(Player.class);
     private AID dealer = null;
     private List<Card> cards;
     private double money;
+
+    @Override
+    public Action ai(List<Action> moves) {
+        if (BlackJack.score(this.cards) > 16) {
+            return Action.Pass;
+        } else {
+            return Action.Card;
+        }
+    }
 
     enum States {
         Searching,
@@ -48,15 +58,8 @@ public class Player extends Agent {
         return money;
     }
 
-    private Action IA(List<Action> possibleMoves) {
-        var i = new Random().nextInt(possibleMoves.size());
-        return possibleMoves.get(i);
-    }
-
     @Override
     protected void setup() {
-
-
         var fsm = new FSMBehaviour(this) {
             @Override
             public int onEnd() {
@@ -174,12 +177,77 @@ public class Player extends Agent {
         }
     }
 
-    private void waitForTurn(){
+    private void handleAction(Action action) {
+        var reply = new ACLMessage(Proto.ChoosedAction.getValue());
+        reply.addReceiver(dealer);
+        try {
+            reply.setContentObject(action);
+        } catch (IOException e) {
+            logger.error("Couldn't put the ai in the message to the dealer", e);
+        }
+        logger.info("Send choose action: {}", action.toString());
+        send(reply);
+        switch (action) {
+            case Pass:
+            case Double:
+                break;
+            case Card:
+                actionFromMessageFromTheDealer(message -> {
+                    if (message.getPerformative() == ACLMessage.AGREE) {
+                        try {
+                            cards.add((Card) message.getContentObject());
+                        } catch (UnreadableException e) {
+                            logger.error("Couldn't get the card from the message ", e);
+                        }
+                    } else {
+                        logger.warn("Incoherent message form dealer" + message);
+                    }
+                });
+        }
+    }
 
+    private boolean handleMyTurn() {
+        logger.info("Handling my turn");
+        final boolean[] isMyTurnFinish = {false};
+        actionFromMessageFromTheDealer(message -> {
+            if (message.getPerformative() == Proto.Busted.getValue()) {
+                logger.info("I lost");
+                isMyTurnFinish[0] = true;
+            } else if (message.getPerformative() == Proto.Actions.getValue()) {
+                try {
+                    var actions = (List<Action>) message.getContentObject();
+                    logger.info("Receiving actions");
+                    handleAction(this.ai(actions));
+                } catch (UnreadableException e) {
+                    logger.error("Unable to get actions from the dealer", e);
+                }
+            } else if (message.getPerformative() == Proto.TurnFinished.getValue()) {
+                isMyTurnFinish[0] = true;
+            }
+        });
+        return isMyTurnFinish[0];
+    }
+
+    private void waitForTurn() {
+        logger.info("Waiting for turn");
+        actionFromMessageFromTheDealer(message -> {
+            if (message.getPerformative() == Proto.YourTurn.getValue()) {
+                logger.info("My turn");
+            } else {
+                logger.warn("Ignored message from dealer");
+            }
+        });
     }
 
     private void play() {
         bet(15);
+        waitForTurn();
+        while (!handleMyTurn()) ;
+    }
+
+    private void actionFromMessageFromTheDealer(ActionMessageDealer action) {
+        var message = getMessageFromDealer();
+        action.action(message);
     }
 
     private ACLMessage getMessageFromDealer() {
@@ -192,11 +260,15 @@ public class Player extends Agent {
             if (sender.equals(dealer)) {
                 return message;
             } else {
-                logger.info("Message ignored from" + message.getSender());
+                logger.info("Message ignored from" + message.getSender().getName());
             }
         }
         // Can't happend
         return null;
+    }
+
+    interface ActionMessageDealer {
+        void action(ACLMessage message);
     }
 
     class Play extends OneShotBehaviour {

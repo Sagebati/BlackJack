@@ -40,7 +40,7 @@ public class Dealer extends Agent {
         busted = new HashSet<>();
     }
 
-    private enum States{
+    private enum States {
         Dealing,
         FinalState;
     }
@@ -62,10 +62,6 @@ public class Dealer extends Agent {
         }
 
         return res;
-    }
-
-    public void execute(Player player, javax.swing.Action action) {
-
     }
 
     @Override
@@ -113,7 +109,7 @@ public class Dealer extends Agent {
     }
 
     private void collectPlayers(long millis) {
-        logger.info("Waiting for players");
+        logger.info("Waiting for players ({} connected)", players.size());
         var message = blockingReceive(millis);
         if (message != null) {
             logger.info("Received" + message);
@@ -125,7 +121,7 @@ public class Dealer extends Agent {
                     messageToSend.addReceiver(sender);
                     send(messageToSend);
                     players.add(sender);
-                    logger.info("Player added to the game" + sender);
+                    logger.info("Player added to the game" + sender.getName());
                 }
             } catch (UnreadableException e) {
                 logger.error("Cannot read the content of the message of the player", e);
@@ -155,6 +151,7 @@ public class Dealer extends Agent {
                     if (message.getPerformative() == ACLMessage.AGREE) {
                         var bet = Double.parseDouble(message.getContent());
                         bets.put(sender, bet);
+                        logger.info("{} accepted to bet {}", sender, bet);
                         playerCards.put(sender, deck.pullCards(2));
                         var messageToSend = new ACLMessage(ACLMessage.INFORM);
                         messageToSend.addReceiver(sender);
@@ -164,10 +161,10 @@ public class Dealer extends Agent {
                             logger.error("Couldn't set the playerCards to send");
                         }
                         send(messageToSend);
-                        logger.info("Message sent to " + sender + "with his playerCards");
+                        logger.info("Message sent to " + sender.getName() + " with his playerCards");
                     }
                 } else {
-                    logger.warn("Sender :" + sender + "ignored didn't ask for play");
+                    logger.warn("Sender :" + sender.getName() + "ignored didn't ask for play");
                 }
             }
         }
@@ -196,25 +193,24 @@ public class Dealer extends Agent {
 
     private boolean handlePlayerTurn(AID player) {
         boolean turnFinished = false;
-        var messageTosend = new ACLMessage(ACLMessage.INFORM);
-        messageTosend.addReceiver(player);
+
         var actions = legalsMoves(playerCards.get(player));
         if (actions.isEmpty()) {
             logger.info("Player busted : " + player);
-            try {
-                messageTosend.setContentObject(Proto.Busted);
-                turnFinished = true;
-            } catch (IOException e) {
-                logger.error("Busted", e);
-            }
+            var m = new ACLMessage(Proto.Busted.getValue());
+            m.addReceiver(player);
+            send(m);
+            turnFinished = true;
         } else {
             try {
-                messageTosend.setContentObject((Serializable) actions);
+                var m = new ACLMessage(Proto.Actions.getValue());
+                m.setContentObject((Serializable) actions);
+                m.addReceiver(player);
+                send(m);
             } catch (IOException e) {
                 logger.error("Adding actions to the message", e);
             }
         }
-        send(messageTosend);
         if (!turnFinished) {
             var reply = blockingReceive();
             if (reply.getSender().equals(player)) {
@@ -224,7 +220,7 @@ public class Dealer extends Agent {
                         turnFinished = handleAction(player, action);
                     }
                 } catch (UnreadableException e) {
-                    logger.error("Cannot read the action choose by the payer", e);
+                    logger.error("Cannot read the ai choose by the payer", e);
                 } catch (IOException e) {
                     logger.error("Couldn't put the playerCards in the content object", e);
                 }
@@ -245,8 +241,10 @@ public class Dealer extends Agent {
     }
 
     private void finishGame() {
-        logger.info("Finishing the game");
-        if (BlackJack.score(this.cards) > 21) {
+        logger.info("Finishing the game: \n" + this.gameState());
+        final int myScore = BlackJack.score(this.cards);
+
+        if (myScore > 21) {
             // Everyone wins
             bets.keySet().stream().filter(p -> !busted.contains(p)).forEach(
                     p -> giveMoney(p, bets.get(p) * 2)
@@ -254,10 +252,11 @@ public class Dealer extends Agent {
         } else {
             bets.keySet().stream().filter(p -> !busted.contains(p)).forEach(
                     p -> {
-                        if (BlackJack.score(playerCards.get(p)) > BlackJack.score(this.cards)) {
+                        final int playerScore = BlackJack.score(playerCards.get(p));
+                        if (playerScore > myScore) {
                             logger.info("Player: {}, won : {}", p, bets.get(p));
                             giveMoney(p, bets.get(p) * 2);
-                        } else if (BlackJack.score(playerCards.get(p)) == BlackJack.score(this.cards)) {
+                        } else if (playerScore == myScore) {
                             logger.info("Player: {}, Equality", p);
                             giveMoney(p, bets.get(p));
                         } else {
@@ -302,7 +301,13 @@ public class Dealer extends Agent {
         logger.info("Stating game");
         players.stream().filter(bets::containsKey).forEach(
                 p -> {
+                    var messageTosend = new ACLMessage(Proto.YourTurn.getValue());
+                    messageTosend.addReceiver(p);
+                    send(messageTosend); // It's player turn
                     while (!handlePlayerTurn(p)) ;
+                    var m = new ACLMessage(Proto.TurnFinished.getValue());
+                    m.addReceiver(p);
+                    send(m);
                 }
         );
         handleCroupierTurn();
@@ -337,5 +342,13 @@ public class Dealer extends Agent {
         public boolean done() {
             return terminated;
         }
+    }
+
+    public String gameState() {
+        final var b = new StringBuilder();
+        b.append("Finals scores dealer :").append(BlackJack.score(this.cards)).append("\n");
+        bets.keySet().forEach(aid ->
+                b.append(aid.getName()).append("score : ").append(BlackJack.score(playerCards.get(aid))).append("\n"));
+        return b.toString();
     }
 }
