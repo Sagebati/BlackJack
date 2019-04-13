@@ -1,12 +1,11 @@
 package agent;
 
-import game.Actions;
+import game.Action;
 import game.BlackJack;
 import game.Card;
 import jade.core.AID;
 import jade.core.Agent;
 import jade.core.behaviours.FSMBehaviour;
-import jade.core.behaviours.OneShotBehaviour;
 import jade.core.behaviours.SimpleBehaviour;
 import jade.domain.DFService;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
@@ -17,7 +16,6 @@ import jade.lang.acl.UnreadableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.swing.*;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
@@ -26,53 +24,47 @@ public class Dealer extends Agent {
     private final Logger logger = LoggerFactory.getLogger(Dealer.class);
 
     private final List<AID> players;
-    private final HashMap<AID, List<Card>> cards;
-    private final Set<States> states;
+    private final HashMap<AID, List<Card>> playerCards;
     private final Map<AID, Double> bets;
+    private final List<Card> cards;
+    private final Set<Player> busted;
     private BlackJack deck;
+
 
     public Dealer() {
         this.bets = new HashMap<>();
-        this.cards = new HashMap<>();
-        this.states = new HashSet<>();
+        this.playerCards = new HashMap<>();
         this.players = new ArrayList<>(4);
         this.deck = new BlackJack(6);
+        this.cards = new ArrayList<>();
+        busted = new HashSet<>();
+    }
+
+    private enum States{
+        Dealing,
+        FinalState;
     }
 
     public List<AID> getPlayers() {
         return players;
     }
 
-    public Set<States> getStates() {
-        return states;
-    }
+    private Collection<Action> legalsMoves(List<Card> cards) {
+        var res = new ArrayList<Action>();
+        res.add(Action.Pass);
 
-    public enum States {
-        MyTurn,
-        Dealing,
-        TableEmpty
-    }
-
-
-    public Collection<Actions> legalsMoves(Player player) {
-        var res = new ArrayList<Actions>();
-        res.add(Actions.Pass);
-        if (bets.containsKey(player)) {
-            res.add(Actions.Card);
-        } else {
-            res.add(Actions.Bet);
-        }
-
-        var s = BlackJack.score(player.getCards());
+        var s = BlackJack.score(cards);
         if (s > 21) {
             // Busted
             return new ArrayList<>();
+        } else {
+            res.add(Action.Card);
         }
 
         return res;
     }
 
-    public void execute(Player player, Action action) {
+    public void execute(Player player, javax.swing.Action action) {
 
     }
 
@@ -98,7 +90,7 @@ public class Dealer extends Agent {
                 return super.onEnd();
             }
         };
-        fsm.registerFirstState(new Dealing(), States.TableEmpty.toString());
+        fsm.registerFirstState(new Dealing(), States.Dealing.toString());
         addBehaviour(fsm);
     }
 
@@ -110,6 +102,10 @@ public class Dealer extends Agent {
             logger.error("Cannot deregister dealer" + getAID(), e);
         }
         super.takeDown();
+    }
+
+    private void takeCards() {
+        cards.addAll(this.deck.pullCards(2));
     }
 
     private void collectPlayers() {
@@ -124,7 +120,7 @@ public class Dealer extends Agent {
             var sender = message.getSender();
             try {
                 var object = (Proto) message.getContentObject();
-                if (object == Proto.ASKPLAYING) {
+                if (object == Proto.AskPlay) {
                     var messageToSend = new ACLMessage(ACLMessage.AGREE);
                     messageToSend.addReceiver(sender);
                     send(messageToSend);
@@ -144,8 +140,7 @@ public class Dealer extends Agent {
         for (var player : players) {
             logger.info("Asking to player if he wants to play \n player: \n" + player);
             var message = new ACLMessage(ACLMessage.REQUEST);
-            Proto.setContentObject(message, Proto.BET, logger);
-            message.setSender(getAID());
+            Proto.setContentObject(message, Proto.Bet, logger);
             message.addReceiver(player);
             send(message);
         }
@@ -160,17 +155,16 @@ public class Dealer extends Agent {
                     if (message.getPerformative() == ACLMessage.AGREE) {
                         var bet = Double.parseDouble(message.getContent());
                         bets.put(sender, bet);
-                        cards.put(sender, deck.pullCards(2));
+                        playerCards.put(sender, deck.pullCards(2));
                         var messageToSend = new ACLMessage(ACLMessage.INFORM);
-                        messageToSend.setSender(getAID());
                         messageToSend.addReceiver(sender);
                         try {
-                            messageToSend.setContentObject((Serializable) cards.get(sender));
+                            messageToSend.setContentObject((Serializable) playerCards.get(sender));
                         } catch (IOException e) {
-                            logger.error("Couldn't set the cards to send");
+                            logger.error("Couldn't set the playerCards to send");
                         }
                         send(messageToSend);
-                        logger.info("Message sent to " + sender + "with his cards");
+                        logger.info("Message sent to " + sender + "with his playerCards");
                     }
                 } else {
                     logger.warn("Sender :" + sender + "ignored didn't ask for play");
@@ -180,13 +174,148 @@ public class Dealer extends Agent {
 
     }
 
+    private boolean handleAction(AID player, Action action) throws IOException {
+        ACLMessage message;
+        boolean passed = false;
+        switch (action) {
+            case Card:
+                message = new ACLMessage(ACLMessage.AGREE);
+                var card = this.deck.pullCard();
+                playerCards.get(player).add(card);
+                message.setContentObject(card);
+                message.addReceiver(player);
+                send(message);
+                break;
+            case Pass:
+                passed = true;
+                break;
+
+        }
+        return passed;
+    }
+
+    private boolean handlePlayerTurn(AID player) {
+        boolean turnFinished = false;
+        var messageTosend = new ACLMessage(ACLMessage.INFORM);
+        messageTosend.addReceiver(player);
+        var actions = legalsMoves(playerCards.get(player));
+        if (actions.isEmpty()) {
+            logger.info("Player busted : " + player);
+            try {
+                messageTosend.setContentObject(Proto.Busted);
+                turnFinished = true;
+            } catch (IOException e) {
+                logger.error("Busted", e);
+            }
+        } else {
+            try {
+                messageTosend.setContentObject((Serializable) actions);
+            } catch (IOException e) {
+                logger.error("Adding actions to the message", e);
+            }
+        }
+        send(messageTosend);
+        if (!turnFinished) {
+            var reply = blockingReceive();
+            if (reply.getSender().equals(player)) {
+                try {
+                    var action = (Action) reply.getContentObject();
+                    if (actions.contains(action)) {
+                        turnFinished = handleAction(player, action);
+                    }
+                } catch (UnreadableException e) {
+                    logger.error("Cannot read the action choose by the payer", e);
+                } catch (IOException e) {
+                    logger.error("Couldn't put the playerCards in the content object", e);
+                }
+            } else {
+                logger.info("Message ignored doesn't come from the player");
+            }
+        }
+        return turnFinished;
+    }
+
+    /**
+     * Take care of the croupier turn.
+     */
+    private void handleCroupierTurn() {
+        while (BlackJack.score(this.cards) < 16) {
+            this.cards.add(this.deck.pullCard());
+        }
+    }
+
+    private void finishGame() {
+        logger.info("Finishing the game");
+        if (BlackJack.score(this.cards) > 21) {
+            // Everyone wins
+            bets.keySet().stream().filter(p -> !busted.contains(p)).forEach(
+                    p -> giveMoney(p, bets.get(p) * 2)
+            );
+        } else {
+            bets.keySet().stream().filter(p -> !busted.contains(p)).forEach(
+                    p -> {
+                        if (BlackJack.score(playerCards.get(p)) > BlackJack.score(this.cards)) {
+                            logger.info("Player: {}, won : {}", p, bets.get(p));
+                            giveMoney(p, bets.get(p) * 2);
+                        } else if (BlackJack.score(playerCards.get(p)) == BlackJack.score(this.cards)) {
+                            logger.info("Player: {}, Equality", p);
+                            giveMoney(p, bets.get(p));
+                        } else {
+                            logger.info("Player: {}, Lost", p);
+                            giveMoney(p, 0);
+                        }
+                    }
+            );
+        }
+
+    }
+
+    private void giveMoney(AID player, double money) {
+        var message = new ACLMessage(ACLMessage.INFORM);
+        Proto.setContentObject(message, Proto.Money, logger);
+        message.addReceiver(player);
+        logger.info("Notifying player that he is gonna to have his result");
+        send(message);
+        ACLMessage m;
+        if (money == 0) {
+            m = new ACLMessage(ACLMessage.FAILURE);
+            m.addReceiver(player);
+        } else {
+            m = new ACLMessage(ACLMessage.INFORM);
+            m.setContent("" + money);
+            m.addReceiver(player);
+        }
+        send(m);
+    }
+
+    private void clearGame() {
+        logger.info("Clearing the game");
+        this.bets.clear();
+        this.playerCards.clear();
+        this.deck = new BlackJack(6);
+        this.cards.clear();
+        busted.clear();
+    }
+
+    private void game() {
+        // for each player who bet
+        logger.info("Stating game");
+        players.stream().filter(bets::containsKey).forEach(
+                p -> {
+                    while (!handlePlayerTurn(p)) ;
+                }
+        );
+        handleCroupierTurn();
+        finishGame();
+    }
+
     class Dealing extends SimpleBehaviour {
         private boolean terminated = false;
 
 
         @Override
         public void action() {
-            // While he doent have players don't do nothing
+            // While he dont have players, don't do nothing
             while (players.isEmpty()) {
                 collectPlayers();
             }
@@ -195,9 +324,12 @@ public class Dealer extends Agent {
             while (System.currentTimeMillis() < t + 15000) {
                 collectPlayers(150);
             }
-
+            // taking my cards
+            takeCards();
             // 15 seconds for collecting all the bets.
             collectingBetsAndDistributingCards();
+            game();
+            clearGame();
             terminated = true;
         }
 

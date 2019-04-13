@@ -1,6 +1,6 @@
 package agent;
 
-import game.Actions;
+import game.Action;
 import game.Card;
 import jade.core.AID;
 import jade.core.Agent;
@@ -48,7 +48,7 @@ public class Player extends Agent {
         return money;
     }
 
-    private Actions IA(List<Actions> possibleMoves) {
+    private Action IA(List<Action> possibleMoves) {
         var i = new Random().nextInt(possibleMoves.size());
         return possibleMoves.get(i);
     }
@@ -103,10 +103,9 @@ public class Player extends Agent {
         var res = false;
         logger.info("Connecting to the dealer");
         var message = new ACLMessage(ACLMessage.REQUEST);
-        message.setSender(getAID());
         message.addReceiver(dealer);
         try {
-            message.setContentObject(Proto.ASKPLAYING);
+            message.setContentObject(Proto.AskPlay);
         } catch (IOException e) {
             logger.error("Couldn't add the content object to the message");
         }
@@ -147,9 +146,9 @@ public class Player extends Agent {
     }
 
     private void getCardsFromDealer() {
-        var message = blockingReceive();
+        var message = getMessageFromDealer();
         try {
-            this.cards =  (List<Card>) message.getContentObject();
+            this.cards = (List<Card>) message.getContentObject();
         } catch (UnreadableException e) {
             logger.error("Couldn't get the cards from the dealer", e);
         }
@@ -157,34 +156,47 @@ public class Player extends Agent {
 
     private void bet(double money) {
         // Waiting intructions
-        AID sender = null;
-        while (sender != dealer) {
-            var message = blockingReceive();
-            sender = message.getSender();
-            if (sender.equals(dealer)) {
-                try {
-                    var p = (Proto) message.getContentObject();
-                    if (p == Proto.BET) {
-                        var reply = message.createReply();
-                        reply.setPerformative(ACLMessage.AGREE);
-                        reply.setContent(String.valueOf(money));
-                        send(reply);
-                        getCardsFromDealer();
-                        logger.info("Got cards form the dealer");
-                    }else{
-                        logger.warn("Message ignored from the dealer doesn't respect protocol) \n message : \n" + message);
-                    }
-                } catch (UnreadableException e) {
-                    e.printStackTrace();
-                }
-                break;
+        var message = getMessageFromDealer();
+        try {
+            var p = (Proto) message.getContentObject();
+            if (p == Proto.Bet) {
+                var reply = message.createReply();
+                reply.setPerformative(ACLMessage.AGREE);
+                reply.setContent(String.valueOf(money));
+                send(reply);
+                getCardsFromDealer();
+                logger.info("Got cards form the dealer");
+            } else {
+                logger.warn("Message ignored from the dealer, doesn't respect protocol) \n message : \n" + message);
             }
-            logger.info("Message ignored from" + message.getSender());
+        } catch (UnreadableException e) {
+            e.printStackTrace();
         }
+    }
+
+    private void waitForTurn(){
+
     }
 
     private void play() {
         bet(15);
+    }
+
+    private ACLMessage getMessageFromDealer() {
+        if (this.dealer == null)
+            throw new NullPointerException("Dealer not initialised");
+        AID sender = null;
+        while (!dealer.equals(sender)) {
+            var message = blockingReceive();
+            sender = message.getSender();
+            if (sender.equals(dealer)) {
+                return message;
+            } else {
+                logger.info("Message ignored from" + message.getSender());
+            }
+        }
+        // Can't happend
+        return null;
     }
 
     class Play extends OneShotBehaviour {

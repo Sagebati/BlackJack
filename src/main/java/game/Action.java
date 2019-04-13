@@ -1,8 +1,7 @@
 package game;
 
-public enum Actions {
+public enum Action {
     Card,
-    Bet,
     Pass,
     Double,
 }
