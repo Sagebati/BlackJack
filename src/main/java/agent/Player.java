@@ -68,7 +68,7 @@ public class Player extends Agent implements Intelligency<Action> {
             }
         };
         fsm.registerFirstState(new Searching(), States.Searching.toString());
-        fsm.registerState(new Play(), States.Playing.toString());
+        fsm.registerLastState(new Play(),States.Playing.toString());
         fsm.registerDefaultTransition(States.Searching.toString(), States.Playing.toString());
         addBehaviour(fsm);
     }
@@ -239,10 +239,26 @@ public class Player extends Agent implements Intelligency<Action> {
         });
     }
 
+    private void handleEnd() {
+        actionFromMessageFromTheDealer(m -> {
+            if (m.getPerformative() == Proto.Result.getValue()) {
+                logger.info("Receiving results");
+                actionFromMessageFromTheDealer(mm -> {
+                    if (mm.getPerformative() == ACLMessage.FAILURE) {
+                        logger.info("I lose");
+                    } else if (mm.getPerformative() == ACLMessage.INFORM) {
+                        logger.info("I won {} ", Double.parseDouble(mm.getContent()));
+                    }
+                });
+            }
+        });
+    }
+
     private void play() {
         bet(15);
         waitForTurn();
         while (!handleMyTurn()) ;
+        handleEnd();
     }
 
     private void actionFromMessageFromTheDealer(ActionMessageDealer action) {

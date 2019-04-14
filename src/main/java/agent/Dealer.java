@@ -87,6 +87,7 @@ public class Dealer extends Agent {
             }
         };
         fsm.registerFirstState(new Dealing(), States.Dealing.toString());
+        fsm.registerLastState(new Dealing(), States.Dealing.toString());
         addBehaviour(fsm);
     }
 
@@ -271,8 +272,7 @@ public class Dealer extends Agent {
     }
 
     private void giveMoney(AID player, double money) {
-        var message = new ACLMessage(ACLMessage.INFORM);
-        Proto.setContentObject(message, Proto.Money, logger);
+        var message = new ACLMessage(Proto.Result.getValue());
         message.addReceiver(player);
         logger.info("Notifying player that he is gonna to have his result");
         send(message);
